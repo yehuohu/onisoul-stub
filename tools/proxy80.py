@@ -3,8 +3,8 @@
 
 作用：
   - 对外只暴露 80；stub 绑定回环，不直接公网可达。
-  - 原样转发请求/响应，并把报文记录到 logs/capture-YYYYMMDD.jsonl，供协议核对。
-  - 二进制资源（.unity3d/.png/mp3 等）只记大小，不记内容。
+  - 原样转发请求/响应，仅把元数据记录到 logs/capture-YYYYMMDD.jsonl，供协议核对。
+  - 所有请求/响应正文只记大小，避免凭据及会话进入日志。
 
 用法：
     python3 tools/proxy80.py --listen 80 --upstream 18080
@@ -24,7 +24,7 @@ ROOT = os.environ.get("ONI_ROOT") or os.path.dirname(
 )
 LOG_DIR = os.environ.get("ONI_LOG_DIR") or os.path.join(ROOT, "logs")
 BINARY_EXT = (".unity3d", ".png", ".jpg", ".mp3", ".d", ".bin", ".ico", ".gif")
-MAX_BODY_LOG = 64 * 1024
+
 
 
 def log_path() -> str:
@@ -83,8 +83,8 @@ class Handler(socketserver.BaseRequestHandler):
             self._send(502, b'{"succeeded":false,"error":"UPSTREAM"}',
                        {"Content-Type": "application/json; charset=utf-8"})
             write_rec({"ts": datetime.now().isoformat(timespec="seconds"),
-                       "method": method, "path": path, "status": 502,
-                       "error": str(exc)})
+                       "method": method, "path": path.split("?", 1)[0], "status": 502,
+                       "error": type(exc).__name__})
             return
 
         self._send(status, resp_body, resp_headers)
@@ -95,13 +95,14 @@ class Handler(socketserver.BaseRequestHandler):
             "ts": datetime.now().isoformat(timespec="seconds"),
             "method": method,
             "path": path.split("?")[0],
-            "api": path.split("/api/", 1)[-1].strip("/") if "/api/" in path else "",
+            "api": path.split("?", 1)[0].split("/api/", 1)[-1].strip("/") if "/api/" in path else "",
             "status": status,
             "ms": round((time.time() - t0) * 1000),
-            "req_body": ("<binary %dB>" % len(body)) if is_bin
-                        else body[:MAX_BODY_LOG].decode("utf-8", "replace"),
-            "resp_body": ("<binary %dB>" % len(resp_body)) if is_bin
-                         else resp_body[:MAX_BODY_LOG].decode("utf-8", "replace"),
+            # Omit all bodies, not just known login routes: legacy endpoints and
+            # errors can carry passwords, cookies or session tokens in any format.
+            "req_body": "<%s %dB>" % ("binary" if is_bin else "omitted", len(body)),
+            "resp_body": "<%s %dB>" % ("binary" if is_bin else "omitted", len(resp_body)),
+            "req_size": len(body),
             "resp_size": len(resp_body),
         })
 

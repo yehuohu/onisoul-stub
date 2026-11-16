@@ -122,10 +122,9 @@ function go(p){ if(p==="login"){ location.href="{action}"; return; } location.hr
   i.src="{action}?page=vp&w="+window.innerWidth+"&h="+window.innerHeight
        +"&sw="+screen.width+"&sh="+screen.height;
 })();
-/* 记住账号密码：勾选框可点，勾上时把账号密码写进本地 cookie，下次打开自动回填。
-   容器是 QtWebKit（无 localStorage 保障），所以走 document.cookie；仅本地 stub 用。 */
+/* 仅记住账号。兼容 QtWebKit，不保存或恢复密码。 */
 (function(){
-  var CK="oni_login";
+  var CK="oni_account";
   function getCookie(n){
     var m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]*)(;|$)"));
     return m?m[2]:"";
@@ -134,26 +133,28 @@ function go(p){ if(p==="login"){ location.href="{action}"; return; } location.hr
     var d=new Date(); d.setTime(d.getTime()+(days*24*60*60*1000));
     document.cookie=n+"="+v+";expires="+d.toUTCString()+";path=/";
   }
+  // Every account page clears the legacy password-bearing cookie, even without a form.
+  setCookie("oni_login","",-1);
   var box=document.getElementById("remember");
   var form=document.querySelector("form");
   if(!box||!form){ return; }
   var acc=form.querySelector('input[name="account"]');
-  var pwd=form.querySelector('input[name="password"]');
   function isChecked(){ return box.className.indexOf("checked")>=0; }
   var saved=getCookie(CK);
   if(saved){
     try{
       var o=JSON.parse(decodeURIComponent(saved));
-      if(o&&o.a){ acc.value=o.a; pwd.value=o.p||""; box.className="ui-radio checked"; }
+      if(o&&typeof o.a==="string"&&o.a){ acc.value=o.a; box.className="ui-radio checked"; }
       else{ box.className="ui-radio"; }
     }catch(e){ box.className="ui-radio"; }
   }
   box.onclick=function(){
     box.className = isChecked() ? "ui-radio" : "ui-radio checked";
+    if(!isChecked()){ setCookie(CK,"",-1); }
   };
   form.onsubmit=function(){
     if(isChecked()&&acc.value){
-      setCookie(CK, encodeURIComponent(JSON.stringify({a:acc.value,p:pwd.value})), 180);
+      setCookie(CK, encodeURIComponent(JSON.stringify({a:acc.value})), 180);
     }else{
       setCookie(CK,"",-1);
     }
@@ -203,11 +204,11 @@ _LOGIN_BODY = """<div class="wrap">
       <div class="l_list">
         <span class="ui-label label-user"></span>
         <span class="ui-input-wrap"><input class="ui-input" type="text" name="account" value="{account}" maxlength="32"></span>
-        <span class="ui-radio checked" id="remember"></span>
+        <span class="ui-radio" id="remember" title="仅记住账号，不保存密码" aria-label="仅记住账号"></span>
       </div>
       <div class="l_list">
         <span class="ui-label label-pwd"></span>
-        <span class="ui-input-wrap"><input class="ui-input" type="password" name="password" value="{password}" maxlength="32"></span>
+        <span class="ui-input-wrap"><input class="ui-input" type="password" name="password" value="" maxlength="32" autocomplete="off"></span>
       </div>
       <input class="btn_submit" type="submit" value="">
     </div>
@@ -344,9 +345,9 @@ def _news_rows() -> str:
 
 
 def render(account: str = "", password: str = "", error: str = "") -> bytes:
+    # Keep the legacy argument for callers, but never echo credentials into HTML.
     body = _LOGIN_BODY.replace("{menu}", _MENU).replace("{news}", _news_rows())
     body = body.replace("{account}", html.escape(account, quote=True))
-    body = body.replace("{password}", html.escape(password, quote=True))
     body = body.replace("{error}", html.escape(error))
     return _document(body)
 
@@ -508,20 +509,20 @@ def submit(form: dict[str, Any]) -> LoginResult:
     account = str(form.get("account") or "").strip()
     password = str(form.get("password") or "").strip()
     if not account or not password:
-        return LoginResult(200, render(account, password, "用户名与密码不能为空"))
+        return LoginResult(200, render(account, error="用户名与密码不能为空"))
     if len(password) < 3:
-        return LoginResult(200, render(account, password, "密码至少 3 位"))
+        return LoginResult(200, render(account, error="密码至少 3 位"))
     state = verify_user(account, password)
     if state == "no_user":
-        return LoginResult(200, render(account, password, "该账号尚未注册，请先点「注册新账号」"))
+        return LoginResult(200, render(account, error="该账号尚未注册，请先点「注册新账号」"))
     if state == "bad_password":
-        return LoginResult(200, render(account, password, "密码错误"))
+        return LoginResult(200, render(account, error="密码错误"))
     if state != "ok":
-        return LoginResult(200, render(account, password, "服务器校验失败，请稍后重试"))
+        return LoginResult(200, render(account, error="服务器校验失败，请稍后重试"))
     token, ident = _issue(account)
     location = redirect_url(token, ident)
     print(
-        f"[stub][login] account={account} token={token[:8]}… id={ident[:8]}… -> {location}",
+        "[stub][login] session issued; redirecting to app",
         file=sys.stdout,
         flush=True,
     )
